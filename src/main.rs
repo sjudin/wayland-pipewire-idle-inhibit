@@ -19,35 +19,33 @@
 
 use std::{
     error::Error,
+    io::{self, Write},
     panic,
     process::ExitCode,
     sync::{
-        Arc,
         atomic::{self, AtomicBool},
+        Arc,
     },
 };
 
-mod inhibit_idle_state;
-use inhibit_idle_state::{InhibitIdleState, InhibitIdleStateEvent};
-
-mod pipewire_connection;
-use message_queue::MessageQueueReceiver;
-use pipewire_connection::{PWEvent, PWMsg, PWThread};
-
+mod dbus_service;
 mod idle_inhibitor;
+mod inhibit_idle_state;
+mod message_queue;
+mod pipewire_connection;
+mod settings;
+
 use idle_inhibitor::{
-    IdleInhibitor,
     dbus::DbusIdleInhibitor,
     dry::DryRunIdleInhibitor,
     wayland::{WaylandEventQueue, WaylandIdleInhibitor},
+    IdleInhibitor,
 };
-
-mod settings;
-use settings::Settings;
-
-mod message_queue;
-
+use inhibit_idle_state::{InhibitIdleState, InhibitIdleStateEvent};
+use message_queue::MessageQueueReceiver;
 use nix::{errno::Errno, sys::epoll::*};
+use pipewire_connection::{PWEvent, PWMsg, PWThread};
+use settings::Settings;
 
 #[repr(u64)]
 enum MessageQueueType {
@@ -67,9 +65,22 @@ impl From<u64> for MessageQueueType {
 }
 
 #[derive(Clone, Debug)]
-enum Msg {
+pub enum Msg {
     PWEvent(PWEvent),
     InhibitIdleStateEvent(InhibitIdleStateEvent),
+    ToggleManual,
+}
+
+fn print_waybar_status(inhibited: bool) {
+    let icon = if inhibited { "☕" } else { "⌚" };
+    let text = if inhibited {
+        "Idle Inhibited"
+    } else {
+        "Idling"
+    };
+
+    println!("{{\"text\":\"{}\", \"tooltip\":\"{}\"}}", icon, text);
+    io::stdout().flush().unwrap();
 }
 
 impl Msg {
@@ -86,7 +97,7 @@ impl Msg {
                 }
 
                 PWEvent::InhibitIdleState(inhibit_idle_state) => {
-                    inhibit_idle_state_manager.set_is_idle_inhibited(*inhibit_idle_state);
+                    inhibit_idle_state_manager.set_is_audio_inhibited(*inhibit_idle_state);
                 }
 
                 PWEvent::ThreadPanic(err) => {
@@ -102,8 +113,15 @@ impl Msg {
                 match inhibit_idle_state_event {
                     InhibitIdleStateEvent::InhibitIdle(inhibit_idle_state) => {
                         idle_inhibitor.set_inhibit_idle(*inhibit_idle_state)?;
+                        print_waybar_status(*inhibit_idle_state);
+                    }
+                    InhibitIdleStateEvent::AudioInhibitTimerFired => {
+                        inhibit_idle_state_manager.set_is_inhibited_from_timer();
                     }
                 }
+            }
+            Msg::ToggleManual => {
+                inhibit_idle_state_manager.toggle_manual_inhibit();
             }
         }
         Ok(())
@@ -146,6 +164,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     let (mq, mq_receiver) =
         message_queue::message_queue::<Msg>(&epoll, MessageQueueType::Main as u64)?;
 
+    let mq_for_dbus = mq.clone();
+    std::thread::spawn(move || {
+        // We handle the error here because this thread will be detached
+        if let Err(e) = dbus_service::start_dbus_service(mq_for_dbus) {
+            log::error!("D-Bus service encountered a critical error: {}", e);
+        }
+    });
+
     panic::set_hook(Box::new({
         let mq = mq.clone();
         move |panic_info| {
@@ -175,6 +201,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     for sig in signal_hook::consts::TERM_SIGNALS {
         signal_hook::flag::register(*sig, Arc::clone(&term))?;
     }
+
+    print_waybar_status(false);
 
     match settings.get_idle_inhibitor() {
         settings::IdleInhibitor::DBus => {
