@@ -36,6 +36,8 @@ pub struct InhibitIdleState<Msg: From<InhibitIdleStateEvent> + Clone> {
     inhibit_idle_timout_callback: Timer,
     inhibit_idle_timout_callback_guard: Option<Guard>,
     inhibit_idle_timout: Option<Duration>,
+    pw_inhibit: bool,
+    manual_inhibit: bool,
     is_idle_inhibited: Arc<RwLock<bool>>,
     inhibit_idle_callback: MessageQueueSender<Msg>,
 }
@@ -49,14 +51,18 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
             inhibit_idle_timout_callback: Timer::new(),
             inhibit_idle_timout_callback_guard: None,
             inhibit_idle_timout,
+            pw_inhibit: false,
+            manual_inhibit: false,
             is_idle_inhibited: Arc::new(RwLock::new(false)),
             inhibit_idle_callback,
         }
     }
 
-    /// Wrapper function to update the inhibit idle state. It only updates the value if necessary,
-    /// and manages the timer. When a call is made to change the state, it starts a timer with the
-    /// set minimum duration that actually executes the update of the is_idle_inhibited field.
+    pub fn set_manual_inhibit(&mut self, value: bool) {
+        self.manual_inhibit = value;
+        self.reevaluate_effective_state();
+    }
+
     pub fn set_is_idle_inhibited(&mut self, is_idle_inhibited: bool) {
         if let (Some(inhibit_idle_timout), true) = (self.inhibit_idle_timout, is_idle_inhibited) {
             if self.inhibit_idle_timout_callback_guard.is_some() {
@@ -71,11 +77,11 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
                         let is_idle_inhibited_ref = Arc::clone(&self.is_idle_inhibited);
                         let inhibit_idle_callback = self.inhibit_idle_callback.clone();
                         move || {
-                            let is_idle_inhibited_ref = &is_idle_inhibited_ref;
+                            // Fix: Use references to avoid moving out of the FnMut closure
                             Self::update_is_idle_inhibited(
-                                Arc::clone(is_idle_inhibited_ref),
-                                inhibit_idle_callback.clone(),
-                                is_idle_inhibited,
+                                &is_idle_inhibited_ref,
+                                &inhibit_idle_callback,
+                                true,
                             );
                         }
                     }),
@@ -84,18 +90,24 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
             if self.inhibit_idle_timout_callback_guard.is_some() {
                 self.inhibit_idle_timout_callback_guard = None
             }
-            Self::update_is_idle_inhibited(
-                self.is_idle_inhibited.clone(),
-                self.inhibit_idle_callback.clone(),
-                is_idle_inhibited,
-            );
+            self.pw_inhibit = is_idle_inhibited;
+            self.reevaluate_effective_state();
         }
+    }
+
+    fn reevaluate_effective_state(&mut self) {
+        let new_effective = self.pw_inhibit || self.manual_inhibit;
+        Self::update_is_idle_inhibited(
+            &self.is_idle_inhibited,
+            &self.inhibit_idle_callback,
+            new_effective,
+        );
     }
 
     /// Private function that accesses the reference of the state and updates its value
     fn update_is_idle_inhibited(
-        is_idle_inhibited_ref: Arc<RwLock<bool>>,
-        inhibit_idle_callback: MessageQueueSender<Msg>,
+        is_idle_inhibited_ref: &Arc<RwLock<bool>>,
+        inhibit_idle_callback: &MessageQueueSender<Msg>,
         is_idle_inhibited: bool,
     ) {
         if *is_idle_inhibited_ref.read().unwrap() == is_idle_inhibited {
