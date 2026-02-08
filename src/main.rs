@@ -128,6 +128,9 @@ impl Msg {
                             &("com.rafaelrc.WaylandPipewireIdleInhibit", changed, Vec::<&str>::new()),
                         )?;
                     }
+                    InhibitIdleStateEvent::TimeoutExpired => {
+                        inhibit_idle_state_manager.handle_timeout();
+                    }
                 }
             },
 
