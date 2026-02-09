@@ -17,18 +17,18 @@
 //! Inhibit idle in Wayland compositors when audio is being played through PipeWire, with highly
 //! customisable options
 
+use std::collections::HashMap;
 use std::{
     error::Error,
     panic,
     process::ExitCode,
     sync::{
-        Arc,
         atomic::{self, AtomicBool},
+        Arc,
     },
 };
-use std::collections::HashMap;
 
-use zbus::blocking::{Connection, object_server::InterfaceRef};
+use zbus::blocking::{object_server::InterfaceRef, Connection};
 use zbus::zvariant::Value;
 
 mod dbus_server;
@@ -43,10 +43,10 @@ use pipewire_connection::{PWEvent, PWMsg, PWThread};
 
 mod idle_inhibitor;
 use idle_inhibitor::{
-    IdleInhibitor,
     dbus::DbusIdleInhibitor,
     dry::DryRunIdleInhibitor,
     wayland::{WaylandEventQueue, WaylandIdleInhibitor},
+    IdleInhibitor,
 };
 
 mod settings;
@@ -114,25 +114,31 @@ impl Msg {
                         idle_inhibitor.set_inhibit_idle(*inhibit_idle_state)?;
 
                         // Update effective state in D-Bus object
-                        interface_handle.get_mut().set_effective_inhibit(*inhibit_idle_state);
+                        interface_handle
+                            .get_mut()
+                            .set_effective_inhibit(*inhibit_idle_state);
 
                         // Manually emit PropertiesChanged signal
                         let mut changed = HashMap::new();
                         changed.insert("IsIdleInhibited", Value::from(*inhibit_idle_state));
+                        changed.insert(
+                            "IsManuallyInhibited",
+                            Value::from(interface_handle.get().get_manual_inhibit()),
+                        );
 
                         dbus_conn.emit_signal(
                             None::<()>,
                             "/com/rafaelrc/WaylandPipewireIdleInhibit",
                             "org.freedesktop.DBus.Properties",
                             "PropertiesChanged",
-                            &("com.rafaelrc.WaylandPipewireIdleInhibit", changed, Vec::<&str>::new()),
+                            &changed,
                         )?;
                     }
                     InhibitIdleStateEvent::TimeoutExpired => {
                         inhibit_idle_state_manager.handle_timeout();
                     }
                 }
-            },
+            }
 
             Msg::ManualInhibit(val) => {
                 inhibit_idle_state_manager.set_manual_inhibit(*val);
@@ -197,7 +203,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Setup DBus Server
     let dbus_conn = Connection::session()?;
     let dbus_interface = DBusServer::new(mq.clone());
-    dbus_conn.object_server().at("/com/rafaelrc/WaylandPipewireIdleInhibit", dbus_interface)?;
+    dbus_conn
+        .object_server()
+        .at("/com/rafaelrc/WaylandPipewireIdleInhibit", dbus_interface)?;
     dbus_conn.request_name("com.rafaelrc.WaylandPipewireIdleInhibit")?;
 
     let interface_handle: InterfaceRef<DBusServer> = dbus_conn

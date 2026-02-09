@@ -36,9 +36,14 @@ impl DBusServer {
         }
     }
 
-    /// Update the internal effective state for the D-Bus property
+    // Update the internal effective state for the D-Bus property
     pub fn set_effective_inhibit(&mut self, value: bool) {
         self.effective_inhibit = value;
+    }
+
+    // Update the internal effective state for the D-Bus property
+    pub fn get_manual_inhibit(&self) -> bool {
+        self.manual_inhibit
     }
 }
 
@@ -56,6 +61,13 @@ impl DBusServer {
             // Send message to the main loop to re-evaluate inhibition state
             self.mq.send(Msg::ManualInhibit(value)).unwrap();
         }
+    }
+
+    #[zbus()]
+    fn toggle_manual_inhibit(&mut self) {
+        let new_val = !self.manual_inhibit;
+        self.manual_inhibit = new_val;
+        self.mq.send(Msg::ManualInhibit(new_val)).unwrap();
     }
 
     #[zbus(property)]
