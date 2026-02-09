@@ -64,9 +64,9 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
         // If the timer is running, we let it keep running.
         // This ensures that if the user toggles Manual OFF before the timer expires,
         // we fall back to the timer's state (which is not yet inhibited).
-        
+
         self.manual_inhibit = value;
-        
+
         // Force an update event because manual state changed, even if effective state (bool) might be same
         self.reevaluate_effective_state(true);
     }
