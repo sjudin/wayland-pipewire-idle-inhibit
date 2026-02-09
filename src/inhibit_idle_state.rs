@@ -60,11 +60,6 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
     }
 
     pub fn set_manual_inhibit(&mut self, value: bool) {
-        // Logic Updated: We no longer "promote" the audio state here.
-        // If the timer is running, we let it keep running.
-        // This ensures that if the user toggles Manual OFF before the timer expires,
-        // we fall back to the timer's state (which is not yet inhibited).
-
         self.manual_inhibit = value;
 
         // Force an update event because manual state changed, even if effective state (bool) might be same
@@ -85,11 +80,6 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
             if self.pw_inhibit {
                 return;
             }
-
-            // Logic Updated: We also removed the check for self.manual_inhibit here.
-            // Even if Manual is ON, we start the timer for the audio.
-            // This ensures that if Manual is turned OFF later, the audio still has to
-            // satisfy the minimum duration requirement.
 
             if self.inhibit_idle_timout_callback_guard.is_some() {
                 trace!(target: "InhibitIdleState::set_is_idle_inhibited", "Update Timer is already running");

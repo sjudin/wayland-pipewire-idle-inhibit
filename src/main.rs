@@ -111,15 +111,12 @@ impl Msg {
             Msg::InhibitIdleStateEvent(inhibit_idle_state_event) => {
                 match inhibit_idle_state_event {
                     InhibitIdleStateEvent::InhibitIdle(inhibit_idle_state) => {
-                        // Idempotent call: safe to call even if state hasn't changed
                         idle_inhibitor.set_inhibit_idle(*inhibit_idle_state)?;
 
-                        // Update effective state in D-Bus object
                         interface_handle
                             .get_mut()
                             .set_effective_inhibit(*inhibit_idle_state);
 
-                        // Emit signal with new state (covers both manual and effective changes)
                         emit_properties_changed(interface_handle, dbus_conn)?;
                     }
                     InhibitIdleStateEvent::TimeoutExpired => {
