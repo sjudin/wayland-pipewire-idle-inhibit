@@ -60,9 +60,7 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
     }
 
     pub fn set_manual_inhibit(&mut self, value: bool) {
-        // Logic Fix: If we are enabling manual override and there is a timer running (audio is pending),
-        // we promote the audio to "fully active" immediately.
-        // This ensures that if the user toggles Manual OFF later, the audio keeps the inhibitor active.
+        // Promote audio to active if timer is running (preserves inhibition if manual is later disabled)
         if value && self.inhibit_idle_timout_callback_guard.is_some() {
             debug!(target: "InhibitIdleState::set_manual_inhibit", "Manual enabled while timer running. Promoting audio to active state.");
             self.inhibit_idle_timout_callback_guard = None;
@@ -70,7 +68,8 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
         }
 
         self.manual_inhibit = value;
-        self.reevaluate_effective_state();
+        // Force an update event because manual state changed, even if effective state (bool) is same
+        self.reevaluate_effective_state(true);
     }
 
     pub fn handle_timeout(&mut self) {
@@ -78,7 +77,7 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
             debug!(target: "InhibitIdleState::handle_timeout", "Timer expired, locking inhibition state");
             self.inhibit_idle_timout_callback_guard = None;
             self.pw_inhibit = true;
-            self.reevaluate_effective_state();
+            self.reevaluate_effective_state(false);
         }
     }
 
@@ -88,13 +87,10 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
                 return;
             }
 
-            // Logic Fix: If Manual is already active, we don't need to wait for the timer.
-            // We lock the audio state immediately so it persists if Manual is turned OFF.
             if self.manual_inhibit {
                 debug!(target: "InhibitIdleState::set_is_idle_inhibited", "Audio started while manual active. Immediate inhibit.");
                 self.pw_inhibit = true;
-                // No need to reevaluate effective state (it's already true due to manual), 
-                // but we updated internal state.
+                // No need to reevaluate effective state (already true), but update internal
                 return;
             }
 
@@ -120,16 +116,17 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
                 self.inhibit_idle_timout_callback_guard = None
             }
             self.pw_inhibit = is_idle_inhibited;
-            self.reevaluate_effective_state();
+            self.reevaluate_effective_state(false);
         }
     }
 
-    fn reevaluate_effective_state(&mut self) {
+    fn reevaluate_effective_state(&mut self, force_emit: bool) {
         let new_effective = self.pw_inhibit || self.manual_inhibit;
         Self::update_is_idle_inhibited(
             &self.is_idle_inhibited,
             &self.inhibit_idle_callback,
             new_effective,
+            force_emit,
         );
     }
 
@@ -137,8 +134,9 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
         is_idle_inhibited_ref: &Arc<RwLock<bool>>,
         inhibit_idle_callback: &MessageQueueSender<Msg>,
         is_idle_inhibited: bool,
+        force_emit: bool,
     ) {
-        if *is_idle_inhibited_ref.read().unwrap() == is_idle_inhibited {
+        if !force_emit && *is_idle_inhibited_ref.read().unwrap() == is_idle_inhibited {
             return;
         }
 
@@ -148,6 +146,6 @@ impl<Msg: From<InhibitIdleStateEvent> + Clone + Send + 'static> InhibitIdleState
                 is_idle_inhibited,
             )))
             .unwrap();
-        debug!(target: "InhibitIdleState", "Idle inhibiting was {}", if is_idle_inhibited { "ENABLED" } else { "DISABLED" });
+        debug!(target: "InhibitIdleState", "Idle inhibiting was {}, force={}", if is_idle_inhibited { "ENABLED" } else { "DISABLED" }, force_emit);
     }
 }

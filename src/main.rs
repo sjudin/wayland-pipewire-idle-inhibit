@@ -111,6 +111,7 @@ impl Msg {
             Msg::InhibitIdleStateEvent(inhibit_idle_state_event) => {
                 match inhibit_idle_state_event {
                     InhibitIdleStateEvent::InhibitIdle(inhibit_idle_state) => {
+                        // Idempotent call: safe to call even if state hasn't changed
                         idle_inhibitor.set_inhibit_idle(*inhibit_idle_state)?;
 
                         // Update effective state in D-Bus object
@@ -118,21 +119,8 @@ impl Msg {
                             .get_mut()
                             .set_effective_inhibit(*inhibit_idle_state);
 
-                        // Manually emit PropertiesChanged signal
-                        let mut changed = HashMap::new();
-                        changed.insert("IsIdleInhibited", Value::from(*inhibit_idle_state));
-                        changed.insert(
-                            "IsManuallyInhibited",
-                            Value::from(interface_handle.get().get_manual_inhibit()),
-                        );
-
-                        dbus_conn.emit_signal(
-                            None::<()>,
-                            "/com/rafaelrc/WaylandPipewireIdleInhibit",
-                            "org.freedesktop.DBus.Properties",
-                            "PropertiesChanged",
-                            &changed,
-                        )?;
+                        // Emit signal with new state (covers both manual and effective changes)
+                        emit_properties_changed(interface_handle, dbus_conn)?;
                     }
                     InhibitIdleStateEvent::TimeoutExpired => {
                         inhibit_idle_state_manager.handle_timeout();
@@ -146,6 +134,31 @@ impl Msg {
         }
         Ok(())
     }
+}
+
+/// Helper to emit PropertiesChanged signal
+fn emit_properties_changed(
+    interface_handle: &InterfaceRef<DBusServer>,
+    dbus_conn: &Connection,
+) -> Result<(), Box<dyn Error>> {
+    let mut changed = HashMap::new();
+    changed.insert(
+        "IsIdleInhibited",
+        Value::from(interface_handle.get().get_effective_inhibit()),
+    );
+    changed.insert(
+        "IsManuallyInhibited",
+        Value::from(interface_handle.get().get_manual_inhibit()),
+    );
+
+    dbus_conn.emit_signal(
+        None::<()>,
+        "/com/rafaelrc/WaylandPipewireIdleInhibit",
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        &changed,
+    )?;
+    Ok(())
 }
 
 impl From<PWEvent> for Msg {

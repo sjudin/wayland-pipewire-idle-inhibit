@@ -41,6 +41,10 @@ impl DBusServer {
         self.effective_inhibit = value;
     }
 
+    pub fn get_effective_inhibit(&self) -> bool {
+        self.effective_inhibit
+    }
+
     // Update the internal effective state for the D-Bus property
     pub fn get_manual_inhibit(&self) -> bool {
         self.manual_inhibit
