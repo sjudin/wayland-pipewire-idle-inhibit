@@ -1,4 +1,33 @@
 #!/usr/bin/env bash
+###############################################################################
+# Waybar Custom Module: Wayland-Pipewire-Idle-Inhibit Monitor
+#
+# DESCRIPTION:
+#   This script monitors the state of the wayland-pipewire-idle-inhibit service
+#   via D-Bus and outputs a JSON object compatible with Waybar's custom module.
+#   It tracks three distinct states:
+#     1. 'off': The inhibitor service is not running on the session bus.
+#     2. 'idle': Service is running, but idle inhibition is currently inactive.
+#     3. 'inhibited': Inhibition is active, distinguishing between 'Audio' 
+#        (automated) and 'Manual' (user-forced) triggers.
+#
+# DEPENDENCIES:
+#   - jq: For parsing JSON payloads from busctl.
+#   - systemd (busctl): To interface with the D-Bus session bus.
+#
+# WAYBAR CONFIGURATION EXAMPLE:
+#   "custom/idle-inhibit": {
+#       "return-type": "json",
+#       "format": "{icon}",
+#       "exec": "/path/to/this/script.sh",
+#       "format-icons": {
+#           "inhibited": "󰈈",
+#           "idle": "󰈉",
+#           "off": ""
+#       },
+#       "on-click": "busctl --user call com.rafaelrc.WaylandPipewireIdleInhibit /com/rafaelrc/WaylandPipewireIdleInhibit com.rafaelrc.WaylandPipewireIdleInhibit ToggleManualInhibit"
+#   }
+###############################################################################
 
 # Configuration
 SERVICE="com.rafaelrc.WaylandPipewireIdleInhibit"
@@ -40,7 +69,6 @@ print_status() {
 }
 
 # Get Initial State
-# Use 'status' to check if the name exists on the bus to avoid the "not activatable" error
 if busctl --user status "$SERVICE" &>/dev/null; then
     # Properties are PascalCase by default in zbus
     IS_IDLE=$(busctl --user get-property $SERVICE $OBJECT $INTERFACE IsIdleInhibited --json=short 2>/dev/null | jq -r '.data // "false"')
@@ -54,7 +82,6 @@ fi
 get_and_print_state() {
     # Check if the service exists on the bus
     if busctl --user status "$SERVICE" &>/dev/null; then
-        # Fetch properties defined in dbus_server.rs
         local idle=$(busctl --user get-property "$SERVICE" "$OBJECT" "$INTERFACE" IsIdleInhibited --json=short 2>/dev/null | jq -r '.data // "false"')
         local manual=$(busctl --user get-property "$SERVICE" "$OBJECT" "$INTERFACE" ManualInhibit --json=short 2>/dev/null | jq -r '.data // "false"')
         print_status "$idle" "$manual"
@@ -63,21 +90,19 @@ get_and_print_state() {
     fi
 }
 
-# 1. Output Initial State
+# Output Initial State
 get_and_print_state
 
-# 2. Monitor for changes. 
+# Monitor for changes. 
 # We monitor our service for signals it sends, and org.freedesktop.DBus for name owner changes.
 busctl --user monitor "$SERVICE" "org.freedesktop.DBus" --json=short | while read -r line; do
     # Detect if our service starts or stops (NameOwnerChanged signal from the bus)
     if echo "$line" | jq -e ".member == \"NameOwnerChanged\" and .payload.data[0] == \"$SERVICE\"" >/dev/null; then
         get_and_print_state
     
-    # Detect property changes emitted by the main loop
     elif echo "$line" | jq -e ".member == \"PropertiesChanged\" and .path == \"$OBJECT\"" >/dev/null; then
-        # Parse the custom payload keys emitted in main.rs
-        NEW_IDLE=$(echo "$line" | jq -r '.payload.data[0].IsIdleInhibited.data // empty')
-        NEW_MANUAL=$(echo "$line" | jq -r '.payload.data[0].IsManuallyInhibited.data // empty')
+        NEW_IDLE="$(echo "$line" | jq -r '.payload.data[0].IsIdleInhibited.data')"
+        NEW_MANUAL="$(echo "$line" | jq -r '.payload.data[0].IsManuallyInhibited.data')"
         
         if [[ -n "$NEW_IDLE" && -n "$NEW_MANUAL" ]]; then
             print_status "$NEW_IDLE" "$NEW_MANUAL"
